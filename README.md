@@ -55,8 +55,19 @@ Run `npm run create-admin` with an existing email to reset that account's passwo
 
 ## Going online
 
-Host it somewhere with permanent disk storage for `DATA_DIR`, and serve it over HTTPS. Then set
-`EXPO_PUBLIC_API_URL` in the `.env` file of both apps to its address and rebuild them.
+The included `Dockerfile` runs the server on any host that runs containers, such as Railway, Render or
+Fly.io.
+
+1. **Permanent storage is required.** Attach a volume or disk mounted at `/data`. Without it, every
+   deploy or restart deletes all accounts, bookings, reviews and photos.
+2. **Copy your current data across.** Upload the contents of your local `data` folder into that volume
+   before customers start using it.
+3. **Set the settings** from the table above as the host's environment variables, plus
+   `PUBLIC_URL=https://<your server address>`.
+4. **Use the HTTPS address** the host gives you. Then set `EXPO_PUBLIC_API_URL` in the `.env` file of
+   both apps to it and rebuild them.
+5. **Run one copy only.** The database is a single file, so the server must not be scaled to more than
+   one instance.
 
 ## Tests
 
