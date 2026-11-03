@@ -184,6 +184,7 @@ export function tourInput(body) {
     photo,
     gallery,
     meetingPoint: text(body?.meetingPoint, 'Meeting point', { max: 300 }),
+    pickupPoints: stringList(body?.pickupPoints, 'Pick-up points', { maxItems: 30, maxLength: 200 }),
     published: body?.published === false ? 0 : 1,
   };
 }

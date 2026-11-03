@@ -26,6 +26,7 @@ const RESET_CODE_MINUTES = 15;
 const RESET_RESEND_MS = 60 * 1000;
 const MAX_RESET_ATTEMPTS = 5;
 const MAX_REVIEW_LENGTH = 1000;
+const MAX_NOTIFICATIONS_DELETED = 100;
 const REVIEWS_PER_PAGE = 50;
 const WEEK_REMINDER_DAYS = 7;
 const TOUR_WITH_RATING = `
@@ -87,6 +88,7 @@ function publicTour(row) {
     photo: row.photo,
     gallery: JSON.parse(row.gallery),
     meetingPoint: row.meeting_point,
+    pickupPoints: JSON.parse(row.pickup_points ?? '[]'),
     transport: row.transport,
     groupSize: row.group_size,
     ageRange: row.age_range,
@@ -177,6 +179,7 @@ function publicBooking(row) {
     status: row.status,
     paymentStatus: status,
     paymentPlan: row.payment_plan ?? 'full',
+    pickupPoint: row.pickup_point ?? '',
     feeCents: row.fee_cents ?? 0,
     totalCents: grandTotalCents(row),
     paidCents: paidCents(row),
@@ -772,6 +775,12 @@ export function createApp({
       throw new HttpError(400, `Travellers must be between 1 and ${MAX_TRAVELLERS}.`);
     }
 
+    const pickupPoints = JSON.parse(tour.pickup_points ?? '[]');
+    const pickupPoint = check.text(req.body?.pickupPoint, 'Pick-up point', { max: 200 });
+    if (pickupPoints.length > 0 && !pickupPoints.includes(pickupPoint)) {
+      throw new HttpError(400, 'Choose one of this trip’s pick-up points.');
+    }
+
     // The checkout form sends these. Older app versions don't, so they stay optional here.
     const traveller = req.body?.traveller === undefined ? null : check.travellerDetails(req.body.traveller, 'Traveller');
     const billing = req.body?.billing === undefined ? null : check.billingDetails(req.body.billing);
@@ -787,13 +796,14 @@ export function createApp({
     const { lastInsertRowid } = db
       .prepare(
         `INSERT INTO bookings (user_id, tour_id, tour_title, customer_name, customer_email, customer_phone,
-           start_date, travellers, unit_price, total, payment_plan, fee_cents, deposit_cents, lead_traveller, billing)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           start_date, travellers, unit_price, total, payment_plan, fee_cents, deposit_cents, lead_traveller, billing,
+           pickup_point)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         req.user.id, tour.id, tour.title, req.user.name, req.user.email, req.user.phone, date, travellers,
         tour.price, total, plan, feeCents, plan === 'deposit' ? depositCents : null,
-        JSON.stringify(traveller ?? {}), JSON.stringify(billing ?? {}),
+        JSON.stringify(traveller ?? {}), JSON.stringify(billing ?? {}), pickupPoints.length > 0 ? pickupPoint : '',
       );
     const row = db.prepare('SELECT * FROM bookings WHERE id = ?').get(lastInsertRowid);
     res.status(201).json({ booking: publicBooking(row) });
@@ -890,6 +900,19 @@ export function createApp({
     res.status(204).end();
   });
 
+  // Deletes several at once. Only the person's own notifications are touched, whatever IDs are sent.
+  app.delete('/api/me/notifications', requireUser, (req, res) => {
+    const ids = req.body?.ids;
+    if (!Array.isArray(ids) || ids.length === 0 || ids.length > MAX_NOTIFICATIONS_DELETED) {
+      throw new HttpError(400, `Choose between 1 and ${MAX_NOTIFICATIONS_DELETED} notifications to delete.`);
+    }
+    if (!ids.every((id) => Number.isInteger(id) && id > 0)) throw new HttpError(400, 'Invalid notification.');
+    const remove = db.prepare('DELETE FROM notifications WHERE id = ? AND user_id = ?');
+    let deleted = 0;
+    for (const id of new Set(ids)) deleted += remove.run(id, req.user.id).changes;
+    res.json({ deleted });
+  });
+
   app.get('/api/me/chat', requireUser, (req, res) => {
     res.json({ messages: chatHistory(req.user.id) });
   });
@@ -971,13 +994,13 @@ export function createApp({
     db.prepare(
       `INSERT INTO tours (id, collection, title, badge, subtitle, duration, style, travel, price, summary,
          description, highlights, route, photo, gallery, meeting_point, transport, group_size, age_range,
-         inclusions, published, sort_order)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         inclusions, pickup_points, published, sort_order)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       id, tour.collection, tour.title, tour.badge, tour.subtitle, tour.duration, tour.style, tour.travel,
       tour.price, tour.summary, tour.description, JSON.stringify(tour.highlights), JSON.stringify(tour.route),
       tour.photo, JSON.stringify(tour.gallery), tour.meetingPoint, tour.transport, tour.groupSize, tour.ageRange,
-      JSON.stringify(tour.inclusions), tour.published, sortOrder,
+      JSON.stringify(tour.inclusions), JSON.stringify(tour.pickupPoints), tour.published, sortOrder,
     );
     res.status(201).json({ tour: publicTour(db.prepare('SELECT * FROM tours WHERE id = ?').get(id)) });
   });
@@ -989,14 +1012,14 @@ export function createApp({
     db.prepare(
       `UPDATE tours SET collection = ?, title = ?, badge = ?, subtitle = ?, duration = ?, style = ?, travel = ?,
          price = ?, summary = ?, description = ?, highlights = ?, route = ?, photo = ?, gallery = ?,
-         meeting_point = ?, transport = ?, group_size = ?, age_range = ?, inclusions = ?, published = ?,
+         meeting_point = ?, transport = ?, group_size = ?, age_range = ?, inclusions = ?, pickup_points = ?, published = ?,
          updated_at = datetime('now')
        WHERE id = ?`,
     ).run(
       tour.collection, tour.title, tour.badge, tour.subtitle, tour.duration, tour.style, tour.travel, tour.price,
       tour.summary, tour.description, JSON.stringify(tour.highlights), JSON.stringify(tour.route), tour.photo,
       JSON.stringify(tour.gallery), tour.meetingPoint, tour.transport, tour.groupSize, tour.ageRange,
-      JSON.stringify(tour.inclusions), tour.published, req.params.id,
+      JSON.stringify(tour.inclusions), JSON.stringify(tour.pickupPoints), tour.published, req.params.id,
     );
     if (existing.photo !== tour.photo) removeUnusedPhoto(existing.photo);
     for (const photo of JSON.parse(existing.gallery)) {

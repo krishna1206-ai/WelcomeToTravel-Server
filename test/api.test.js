@@ -815,6 +815,69 @@ test('deleting an account removes traveller and billing details from its booking
   });
 });
 
+test('trips can have several pick-up points, and a booking must choose one of them', async () => {
+  const admin = await adminToken();
+  const { token } = await signUp();
+  const points = ['Sydney Central Station, 8:00 am', 'Bondi Junction, 8:45 am'];
+  const created = await api('/api/admin/tours', { method: 'POST', token: admin, body: { ...NEW_TOUR, title: 'Pickup Trip', pickupPoints: [' Sydney Central Station, 8:00 am ', points[1]] } });
+  assert.equal(created.status, 201);
+  const tour = created.data.tour;
+  assert.deepEqual(tour.pickupPoints, points);
+  assert.deepEqual((await api('/api/tours')).data.tours.find((item) => item.id === tour.id).pickupPoints, points);
+
+  const book = (pickupPoint) => api('/api/bookings', { method: 'POST', token, body: { tourId: tour.id, date: '2099-01-01', travellers: 1, pickupPoint } });
+  assert.equal((await book(undefined)).status, 400);
+  assert.equal((await book('Somewhere else')).status, 400);
+  const booked = await book(points[1]);
+  assert.equal(booked.status, 201);
+  assert.equal(booked.data.booking.pickupPoint, points[1]);
+  const adminRow = (await api('/api/admin/bookings', { token: admin })).data.bookings.find((item) => item.id === booked.data.booking.id);
+  assert.equal(adminRow.pickupPoint, points[1]);
+
+  // Trips without pick-up points don't ask for one, and ignore any sent.
+  const plain = await api('/api/bookings', { method: 'POST', token, body: { tourId: 'east-coast-30', date: '2099-01-01', travellers: 1, pickupPoint: 'Made up' } });
+  assert.equal(plain.status, 201);
+  assert.equal(plain.data.booking.pickupPoint, '');
+
+  // Editing the trip's list keeps what earlier bookings chose.
+  await api(`/api/admin/tours/${tour.id}`, { method: 'PUT', token: admin, body: { ...NEW_TOUR, title: 'Pickup Trip', pickupPoints: ['New stop'] } });
+  assert.equal((await api('/api/me/bookings', { token })).data.bookings.find((item) => item.id === booked.data.booking.id).pickupPoint, points[1]);
+
+  const bad = (pickupPoints) => api('/api/admin/tours', { method: 'POST', token: admin, body: { ...NEW_TOUR, pickupPoints } });
+  assert.equal((await bad('one place')).status, 400);
+  assert.equal((await bad([''])).status, 400);
+  assert.equal((await bad(Array(31).fill('Stop'))).status, 400);
+});
+
+test('customers can delete their own notifications, several at once', async () => {
+  const admin = await adminToken();
+  const owner = await signUp();
+  const other = await signUp();
+  for (let i = 0; i < 3; i += 1) await setBookingStatus(admin, (await bookTrip(owner.token)).id, 'confirmed');
+  await setBookingStatus(admin, (await bookTrip(other.token)).id, 'confirmed');
+  const list = async (token) => (await api('/api/me/notifications', { token })).data.notifications;
+  const mine = await list(owner.token);
+  const theirs = await list(other.token);
+  assert.equal(mine.length, 3);
+  const remove = (ids, token = owner.token) => api('/api/me/notifications', { method: 'DELETE', token, body: { ids } });
+
+  assert.equal((await api('/api/me/notifications', { method: 'DELETE', body: { ids: [mine[0].id] } })).status, 401);
+  assert.equal((await remove([])).status, 400);
+  assert.equal((await remove('all')).status, 400);
+  assert.equal((await remove(['1'])).status, 400);
+  assert.equal((await remove(Array(101).fill(mine[0].id))).status, 400);
+
+  // Someone else's notification ID is ignored, not deleted.
+  const result = await remove([mine[0].id, mine[1].id, theirs[0].id]);
+  assert.equal(result.status, 200);
+  assert.equal(result.data.deleted, 2);
+  assert.deepEqual((await list(owner.token)).map((item) => item.id), [mine[2].id]);
+  assert.equal((await list(other.token)).length, 1);
+
+  // Deleting again is harmless.
+  assert.equal((await remove([mine[0].id])).data.deleted, 0);
+});
+
 test('sign up cannot create an admin', async () => {
   const { user } = await signUp({ role: 'admin' });
   assert.equal(user.role, 'customer');

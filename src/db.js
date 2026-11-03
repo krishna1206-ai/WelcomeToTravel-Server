@@ -171,6 +171,7 @@ export function openDatabase(path) {
     paid_cents: 'INTEGER NOT NULL DEFAULT 0',
     lead_traveller: "TEXT NOT NULL DEFAULT '{}'",
     billing: "TEXT NOT NULL DEFAULT '{}'",
+    pickup_point: "TEXT NOT NULL DEFAULT ''",
   };
   for (const [column, type] of Object.entries(checkoutColumns)) {
     if (!existing.includes(column)) db.exec(`ALTER TABLE bookings ADD COLUMN ${column} ${type}`);
@@ -179,6 +180,7 @@ export function openDatabase(path) {
   const tourColumns = db.prepare('PRAGMA table_info(tours)').all().map((column) => column.name);
   if (!tourColumns.includes('gallery')) db.exec("ALTER TABLE tours ADD COLUMN gallery TEXT NOT NULL DEFAULT '[]'");
   if (!tourColumns.includes('meeting_point')) db.exec("ALTER TABLE tours ADD COLUMN meeting_point TEXT NOT NULL DEFAULT ''");
+  if (!tourColumns.includes('pickup_points')) db.exec("ALTER TABLE tours ADD COLUMN pickup_points TEXT NOT NULL DEFAULT '[]'");
   if (!tourColumns.includes('inclusions')) db.exec("ALTER TABLE tours ADD COLUMN inclusions TEXT NOT NULL DEFAULT '[]'");
   for (const column of TOUR_DETAIL_COLUMNS) {
     if (!tourColumns.includes(column)) db.exec(`ALTER TABLE tours ADD COLUMN ${column} TEXT NOT NULL DEFAULT ''`);
